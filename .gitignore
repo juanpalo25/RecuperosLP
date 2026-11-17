@@ -1,0 +1,27 @@
+# Archivos de datos sensibles - NO subir a GitHub
+Ventas*.xlsx
+Informes*/
+*.xlsx
+
+# Excel temp/lock
+~$*
+.~lock.*
+
+# Config local de Claude
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
