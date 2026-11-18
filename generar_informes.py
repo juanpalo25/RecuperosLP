@@ -327,56 +327,48 @@ def escribir_resumen(ws, data: ComitenteData, periodo: str):
     def _sumar(cargo: str, attr: str) -> float:
         return sum(getattr(r, attr) for r in data.recuperos if r.cargo == cargo)
 
-    desc_bruto_p = _sumar("P", "descuento_bruto")
-    iva_p = _sumar("P", "iva")
-    desc_neto_p = _sumar("P", "descuento_neto")
-    rec_p = _sumar("P", "recupero")
-
-    desc_bruto_c = _sumar("C", "descuento_bruto")
-    iva_c = _sumar("C", "iva")
-    desc_neto_c = _sumar("C", "descuento_neto")
-    rec_c = _sumar("C", "recupero")
+    cargos_info = [
+        ("P", "P - Proveedor", "100% a cargo del proveedor, neto de comision"),
+        ("C", "C - Compartido", "Porcion segun % Cargo P, neto de comision"),
+    ]
+    cargos_presentes = [c for c in cargos_info if any(r.cargo == c[0] for r in data.recuperos)]
 
     aplicar_header(ws, 5, [
         "Tipo de cargo", "Descuento con IVA", "IVA", "Descuento sin IVA",
         "A recuperar del proveedor", "Observacion",
     ])
-    ws.cell(row=6, column=1, value="P - Proveedor")
-    ws.cell(row=6, column=2, value=desc_bruto_p).number_format = MONEY_FMT
-    ws.cell(row=6, column=3, value=iva_p).number_format = MONEY_FMT
-    ws.cell(row=6, column=4, value=desc_neto_p).number_format = MONEY_FMT
-    ws.cell(row=6, column=5, value=rec_p).number_format = MONEY_FMT
-    ws.cell(row=6, column=6, value="100% a cargo del proveedor, neto de comision")
 
-    ws.cell(row=7, column=1, value="C - Compartido")
-    ws.cell(row=7, column=2, value=desc_bruto_c).number_format = MONEY_FMT
-    ws.cell(row=7, column=3, value=iva_c).number_format = MONEY_FMT
-    ws.cell(row=7, column=4, value=desc_neto_c).number_format = MONEY_FMT
-    ws.cell(row=7, column=5, value=rec_c).number_format = MONEY_FMT
-    ws.cell(row=7, column=6, value="Porcion segun % Cargo P, neto de comision")
-
-    for r in (6, 7):
+    fila = 6
+    for codigo, etiqueta, obs in cargos_presentes:
+        ws.cell(row=fila, column=1, value=etiqueta)
+        ws.cell(row=fila, column=2, value=_sumar(codigo, "descuento_bruto")).number_format = MONEY_FMT
+        ws.cell(row=fila, column=3, value=_sumar(codigo, "iva")).number_format = MONEY_FMT
+        ws.cell(row=fila, column=4, value=_sumar(codigo, "descuento_neto")).number_format = MONEY_FMT
+        ws.cell(row=fila, column=5, value=_sumar(codigo, "recupero")).number_format = MONEY_FMT
+        ws.cell(row=fila, column=6, value=obs)
         for c in range(1, 7):
-            ws.cell(row=r, column=c).border = BORDER
+            ws.cell(row=fila, column=c).border = BORDER
+        fila += 1
 
-    ws.cell(row=8, column=1, value="TOTAL")
-    ws.cell(row=8, column=2, value=desc_bruto_p + desc_bruto_c).number_format = MONEY_FMT
-    ws.cell(row=8, column=3, value=iva_p + iva_c).number_format = MONEY_FMT
-    ws.cell(row=8, column=4, value=desc_neto_p + desc_neto_c).number_format = MONEY_FMT
-    ws.cell(row=8, column=5, value=rec_p + rec_c).number_format = MONEY_FMT
+    ws.cell(row=fila, column=1, value="TOTAL")
+    ws.cell(row=fila, column=2, value=sum(r.descuento_bruto for r in data.recuperos)).number_format = MONEY_FMT
+    ws.cell(row=fila, column=3, value=sum(r.iva for r in data.recuperos)).number_format = MONEY_FMT
+    ws.cell(row=fila, column=4, value=sum(r.descuento_neto for r in data.recuperos)).number_format = MONEY_FMT
+    ws.cell(row=fila, column=5, value=sum(r.recupero for r in data.recuperos)).number_format = MONEY_FMT
     for c in range(1, 7):
-        cell = ws.cell(row=8, column=c)
+        cell = ws.cell(row=fila, column=c)
         cell.fill = TOTAL_FILL
         cell.font = TOTAL_FONT
         cell.border = BORDER
 
-    ws["A10"] = (
+    nota_row = fila + 2
+    ws.cell(row=nota_row, column=1, value=(
         "Nota: el recupero se calcula sobre el descuento sin IVA y se ajusta por la "
         "comision del producto (Maestro col K): el proveedor absorbe solo la fraccion "
         "(1 - comision). En promos compartidas (C) se aplica ademas Cargo P / (Cargo DP + Cargo P)."
-    )
-    ws["A10"].font = Font(italic=True, color="595959")
-    ws.merge_cells("A10:F10")
+    ))
+    ws.cell(row=nota_row, column=1).font = Font(italic=True, color="595959")
+    ws.merge_cells(start_row=nota_row, start_column=1, end_row=nota_row, end_column=6)
 
     for col, w in zip("ABCDEF", (18, 20, 15, 20, 24, 55)):
         ws.column_dimensions[col].width = w
@@ -593,19 +585,32 @@ def generar_excel_consolidado(comitentes: dict[str, ComitenteData], periodo: str
     return path
 
 
-def generar_excel_proveedor(data: ComitenteData, periodo: str, out_dir: Path) -> Path:
+def generar_excel_proveedor(data: ComitenteData, periodo: str, out_dir: Path) -> Path | None:
+    # ADM pide que al proveedor solo se le informe el cargo C; el P se comunica por otra via.
+    recuperos_c = [r for r in data.recuperos if r.cargo == "C"]
+    if not recuperos_c:
+        return None
+    skus_c = {r.sku for r in recuperos_c}
+    ventas_c = {k: v for k, v in data.ventas_por_sku_local.items() if k[0] in skus_c}
+    data_filtrada = ComitenteData(
+        codigo=data.codigo,
+        razon_social=data.razon_social,
+        recuperos=recuperos_c,
+        ventas_por_sku_local=ventas_c,
+    )
+
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "Resumen"
-    escribir_resumen(ws1, data, periodo)
+    escribir_resumen(ws1, data_filtrada, periodo)
 
     ws2 = wb.create_sheet("Detalle Recuperos")
-    escribir_detalle_recuperos(ws2, data)
+    escribir_detalle_recuperos(ws2, data_filtrada)
 
     ws3 = wb.create_sheet("Ventas SKU x Local")
-    escribir_ventas(ws3, data)
+    escribir_ventas(ws3, data_filtrada)
 
-    nombre = sanitize_filename(f"Recupero {data.razon_social} - {periodo}") + ".xlsx"
+    nombre = sanitize_filename(f"Recupero {data_filtrada.razon_social} - {periodo}") + ".xlsx"
     path = out_dir / nombre
     wb.save(path)
     return path
@@ -660,11 +665,16 @@ def main():
     out_dir.mkdir(exist_ok=True)
 
     generados = 0
+    omitidos_sin_c = 0
     for clave, data in sorted(comitentes.items(), key=lambda kv: kv[1].razon_social.lower()):
         if not data.recuperos:
             continue
         path = generar_excel_proveedor(data, periodo, out_dir)
-        total = sum(r.recupero for r in data.recuperos)
+        if path is None:
+            omitidos_sin_c += 1
+            print(f"  [{clave}] {data.razon_social}: sin cargos C, no se genera informe.")
+            continue
+        total = sum(r.recupero for r in data.recuperos if r.cargo == "C")
         print(f"  [{clave}] {data.razon_social}: $ {total:,.2f}  -> {path.name}")
         generados += 1
 
